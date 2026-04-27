@@ -4,7 +4,7 @@ import type { User } from '@n8n/db';
 import { SettingsRepository, WorkflowEntity, WorkflowRepository } from '@n8n/db';
 import { Service } from '@n8n/di';
 import { In } from '@n8n/typeorm';
-import { calculateWorkflowChecksum } from 'n8n-workflow';
+import { calculateWorkflowChecksum, type IWorkflowSettings } from 'n8n-workflow';
 
 import { CollaborationService } from '@/collaboration/collaboration.service';
 import { BadRequestError } from '@/errors/response-errors/bad-request.error';
@@ -18,7 +18,7 @@ const KEY = 'mcp.access.enabled';
 
 const BULK_CHUNK_SIZE = 500;
 
-const WORKFLOW_CHECKSUM_FIELDS = [
+const WORKFLOW_CHECKSUM_FIELDS: Array<keyof WorkflowEntity> = [
 	'id',
 	'name',
 	'description',
@@ -36,7 +36,14 @@ type BulkSetAvailableInMCPResult = {
 	skippedCount: number;
 	failedCount: number;
 	changedIds: string[];
+	changedWorkflows: WorkflowMCPAvailabilityChange[];
 	updatedIds?: string[];
+};
+
+type WorkflowMCPAvailabilityChange = {
+	workflowId: string;
+	settings: Pick<IWorkflowSettings, 'availableInMCP'>;
+	checksum: string;
 };
 
 @Service()
@@ -102,11 +109,13 @@ export class McpSettingsService {
 				skippedCount: baselineSize,
 				failedCount: 0,
 				changedIds: [],
+				changedWorkflows: [],
 				...(isWorkflowIdsScope ? { updatedIds: [] } : {}),
 			};
 		}
 
 		const writtenIds: string[] = [];
+		const changedWorkflows: WorkflowMCPAvailabilityChange[] = [];
 		const noOpIds: string[] = [];
 		let failedCount = 0;
 
@@ -115,13 +124,13 @@ export class McpSettingsService {
 
 			try {
 				const chunkResult = await this.workflowRepository.manager.transaction(async (trx) => {
-					const chunkWritten: string[] = [];
+					const chunkWritten: WorkflowMCPAvailabilityChange[] = [];
 					const chunkNoOp: string[] = [];
 					const now = new Date();
 
 					const rows = await trx.find(WorkflowEntity, {
 						where: { id: In(chunk), isArchived: false },
-						select: ['id', 'settings'],
+						select: WORKFLOW_CHECKSUM_FIELDS,
 					});
 
 					for (const row of rows) {
@@ -140,14 +149,23 @@ export class McpSettingsService {
 							{ id: row.id },
 							{ settings: nextSettings, updatedAt: now },
 						);
+						const checksum = await calculateWorkflowChecksum({
+							...row,
+							settings: nextSettings,
+						});
 
-						chunkWritten.push(row.id);
+						chunkWritten.push({
+							workflowId: row.id,
+							settings: { availableInMCP },
+							checksum,
+						});
 					}
 
 					return { written: chunkWritten, noOp: chunkNoOp };
 				});
 
-				writtenIds.push(...chunkResult.written);
+				writtenIds.push(...chunkResult.written.map(({ workflowId }) => workflowId));
+				changedWorkflows.push(...chunkResult.written);
 				noOpIds.push(...chunkResult.noOp);
 			} catch (error) {
 				failedCount += chunk.length;
@@ -167,22 +185,24 @@ export class McpSettingsService {
 			skippedCount: Math.max(0, baselineSize - confirmedIds.length - failedCount),
 			failedCount,
 			changedIds: writtenIds,
+			changedWorkflows,
 			...(isWorkflowIdsScope ? { updatedIds: confirmedIds } : {}),
 		};
 	}
 
 	async broadcastWorkflowMCPAvailabilityChanged(
-		workflowIds: string[],
-		availableInMCP: boolean,
+		changes: WorkflowMCPAvailabilityChange[],
 	): Promise<void> {
-		if (workflowIds.length === 0) return;
+		if (changes.length === 0) return;
+
+		const workflowIds = changes.map(({ workflowId }) => workflowId);
 
 		let openWorkflowIds: string[];
 		try {
 			openWorkflowIds = await this.collaborationService.filterOpenWorkflowIds(workflowIds);
 		} catch (error) {
 			this.logger.warn('Failed to resolve open workflows for settings update broadcast', {
-				workflowCount: workflowIds.length,
+				workflowCount: changes.length,
 				cause: error instanceof Error ? error.message : String(error),
 			});
 			return;
@@ -190,31 +210,17 @@ export class McpSettingsService {
 
 		if (openWorkflowIds.length === 0) return;
 
-		let workflows: WorkflowEntity[];
-		try {
-			workflows = await this.workflowRepository.findByIds(openWorkflowIds, {
-				fields: WORKFLOW_CHECKSUM_FIELDS,
-			});
-		} catch (error) {
-			this.logger.warn('Failed to load workflows for settings update broadcast', {
-				workflowCount: openWorkflowIds.length,
-				cause: error instanceof Error ? error.message : String(error),
-			});
-			return;
-		}
-
-		const workflowsById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+		const changesByWorkflowId = new Map(changes.map((change) => [change.workflowId, change]));
 
 		for (const workflowId of openWorkflowIds) {
-			const workflow = workflowsById.get(workflowId);
-			if (!workflow) continue;
+			const change = changesByWorkflowId.get(workflowId);
+			if (!change) continue;
 
 			try {
-				const checksum = await calculateWorkflowChecksum(workflow);
 				await this.collaborationService.broadcastWorkflowSettingsUpdated(
 					workflowId,
-					{ availableInMCP },
-					checksum,
+					change.settings,
+					change.checksum,
 				);
 			} catch (error) {
 				this.logger.warn('Failed to broadcast workflow settings update', {

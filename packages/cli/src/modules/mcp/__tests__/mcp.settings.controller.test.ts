@@ -315,6 +315,18 @@ describe('McpSettingsController', () => {
 				skippedCount: 0,
 				failedCount: 0,
 				changedIds: ['wf-1', 'wf-2'],
+				changedWorkflows: [
+					{
+						workflowId: 'wf-1',
+						settings: { availableInMCP: true },
+						checksum: 'checksum-wf-1',
+					},
+					{
+						workflowId: 'wf-2',
+						settings: { availableInMCP: true },
+						checksum: 'checksum-wf-2',
+					},
+				],
 			};
 			mcpSettingsService.bulkSetAvailableInMCP.mockResolvedValue(bulkResult);
 
@@ -324,8 +336,7 @@ describe('McpSettingsController', () => {
 			expect(mcpSettingsService.bulkSetAvailableInMCP).toHaveBeenCalledTimes(1);
 			expect(mcpSettingsService.bulkSetAvailableInMCP).toHaveBeenCalledWith(user, dto);
 			expect(mcpSettingsService.broadcastWorkflowMCPAvailabilityChanged).toHaveBeenCalledWith(
-				['wf-1', 'wf-2'],
-				true,
+				bulkResult.changedWorkflows,
 			);
 			expect(result).toEqual({
 				updatedCount: 2,
