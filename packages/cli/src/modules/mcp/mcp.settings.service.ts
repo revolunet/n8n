@@ -212,23 +212,25 @@ export class McpSettingsService {
 
 		const changesByWorkflowId = new Map(changes.map((change) => [change.workflowId, change]));
 
-		for (const workflowId of openWorkflowIds) {
-			const change = changesByWorkflowId.get(workflowId);
-			if (!change) continue;
+		await Promise.allSettled(
+			openWorkflowIds.map(async (workflowId) => {
+				const change = changesByWorkflowId.get(workflowId);
+				if (!change) return;
 
-			try {
-				await this.collaborationService.broadcastWorkflowSettingsUpdated(
-					workflowId,
-					change.settings,
-					change.checksum,
-				);
-			} catch (error) {
-				this.logger.warn('Failed to broadcast workflow settings update', {
-					workflowId,
-					cause: error instanceof Error ? error.message : String(error),
-				});
-			}
-		}
+				try {
+					await this.collaborationService.broadcastWorkflowSettingsUpdated(
+						workflowId,
+						change.settings,
+						change.checksum,
+					);
+				} catch (error) {
+					this.logger.warn('Failed to broadcast workflow settings update', {
+						workflowId,
+						cause: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}),
+		);
 	}
 
 	private async resolveCandidateIds(
