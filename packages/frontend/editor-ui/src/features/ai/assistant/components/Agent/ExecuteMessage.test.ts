@@ -129,12 +129,6 @@ describe('ExecuteMessage', () => {
 
 		workflowsStore.workflow.nodes = workflowNodes as unknown as INodeUi[];
 		workflowsStore.workflow.connections = {} as never;
-		Object.defineProperty(workflowsStore, 'workflowValidationIssues', {
-			get: () => workflowValidationIssuesRef.value,
-		});
-		workflowsStore.formatIssueMessage = vi.fn((value: string | string[]) =>
-			Array.isArray(value) ? value.join(', ') : String(value),
-		);
 		Object.defineProperty(workflowsStore, 'workflowExecutionData', {
 			get: () => workflowExecutionDataRef,
 		});

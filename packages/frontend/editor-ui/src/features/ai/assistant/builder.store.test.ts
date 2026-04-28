@@ -41,6 +41,7 @@ import {
 	createWorkflowDocumentId,
 } from '@/app/stores/workflowDocument.store';
 import { AI_BUILDER_PLAN_MODE_EXPERIMENT } from '@/app/constants/experiments';
+import type { INodeUi, WorkflowValidationIssue } from '@/Interface';
 
 // Mock useI18n to return the keys instead of translations
 vi.mock('@n8n/i18n', () => ({
@@ -148,6 +149,47 @@ vi.mock('vue-router', () => ({
 }));
 
 let workflowState: WorkflowState;
+
+function setWorkflowValidationIssues(validationIssues: WorkflowValidationIssue[]) {
+	if (validationIssues.length === 0) {
+		workflowsStore.workflow.nodes = [];
+		workflowsStore.workflow.connections = {};
+		return;
+	}
+
+	const issuesByNode = new Map<string, Record<string, string | string[]>>();
+
+	for (const issue of validationIssues) {
+		issuesByNode.set(issue.node, {
+			...issuesByNode.get(issue.node),
+			[issue.type]: issue.value,
+		});
+	}
+
+	const issueNodeNames = Array.from(issuesByNode.keys());
+	workflowsStore.workflow.nodes = [
+		...issueNodeNames.map((name, index) => ({
+			...createTestNode({
+				id: `issue-node-${index}`,
+				name,
+			}),
+			issues: Object.fromEntries(
+				Object.entries(issuesByNode.get(name) ?? {}).map(([issueType, value]) => [
+					issueType,
+					{ value },
+				]),
+			) as INodeUi['issues'],
+		})),
+		createTestNode({ id: 'issue-target-node', name: 'Issue Target' }),
+	];
+	workflowsStore.workflow.connections = Object.fromEntries(
+		issueNodeNames.map((name) => [
+			name,
+			{ main: [[{ node: 'Issue Target', type: 'main' as const, index: 0 }]] },
+		]),
+	);
+}
+
 describe('AI Builder store', () => {
 	beforeEach(() => {
 		mockDocumentState = undefined;
@@ -1582,7 +1624,7 @@ describe('AI Builder store', () => {
 
 	describe('workflowTodos', () => {
 		it('returns empty array when no validation issues exist', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [];
 
 			const builderStore = useBuilderStore();
@@ -1590,9 +1632,9 @@ describe('AI Builder store', () => {
 		});
 
 		it('includes credential validation issues', () => {
-			workflowsStore.workflowValidationIssues = [
+			setWorkflowValidationIssues([
 				{ node: 'HTTP Request', type: 'credentials', value: 'Missing credentials' },
-			];
+			]);
 
 			const builderStore = useBuilderStore();
 			expect(builderStore.workflowTodos).toContainEqual(
@@ -1601,7 +1643,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('includes placeholder issues from node parameters', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1622,9 +1664,6 @@ describe('AI Builder store', () => {
 		});
 
 		it('combines credential and placeholder issues', () => {
-			workflowsStore.workflowValidationIssues = [
-				{ node: 'HTTP Request', type: 'credentials', value: 'Missing credentials' },
-			];
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1635,8 +1674,15 @@ describe('AI Builder store', () => {
 					parameters: {
 						url: '<__PLACEHOLDER_VALUE__Enter URL__>',
 					},
+					issues: {
+						credentials: { value: ['Missing credentials'] },
+					},
 				},
+				createTestNode({ id: 'issue-target-node', name: 'Issue Target' }),
 			];
+			workflowsStore.workflow.connections = {
+				'HTTP Request': { main: [[{ node: 'Issue Target', type: 'main', index: 0 }]] },
+			};
 
 			const builderStore = useBuilderStore();
 			expect(builderStore.workflowTodos.length).toBeGreaterThanOrEqual(2);
@@ -1651,7 +1697,7 @@ describe('AI Builder store', () => {
 
 	describe('placeholderIssues', () => {
 		it('returns empty array when nodes have no parameters', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1668,7 +1714,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('returns empty array when node has undefined parameters', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1684,7 +1730,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('detects placeholders in nested object parameters', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1712,7 +1758,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('detects placeholders in array parameters', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1739,7 +1785,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('detects multiple placeholders in the same node', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1760,7 +1806,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('detects placeholders across multiple nodes', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1792,7 +1838,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('deduplicates identical placeholder issues (same node, path, and label)', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			// Simulate a scenario where the same placeholder appears twice
 			// (which shouldn't happen in practice but tests the deduplication)
 			workflowsStore.workflow.nodes = [
@@ -1837,8 +1883,6 @@ describe('AI Builder store', () => {
 				},
 			];
 
-			workflowsStore.workflowValidationIssues = [];
-
 			const builderStore = useBuilderStore();
 			const placeholderIssues = builderStore.workflowTodos.filter((t) => t.type === 'parameters');
 			// Should be skipped because the message already exists
@@ -1864,8 +1908,6 @@ describe('AI Builder store', () => {
 				},
 			];
 
-			workflowsStore.workflowValidationIssues = [];
-
 			const builderStore = useBuilderStore();
 			const placeholderIssues = builderStore.workflowTodos.filter((t) => t.type === 'parameters');
 			// Should still create the placeholder issue
@@ -1873,7 +1915,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('ignores non-string parameter values', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1894,7 +1936,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('ignores strings that do not match placeholder format', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1916,7 +1958,7 @@ describe('AI Builder store', () => {
 		});
 
 		it('ignores placeholder with empty label', () => {
-			workflowsStore.workflowValidationIssues = [];
+			setWorkflowValidationIssues([]);
 			workflowsStore.workflow.nodes = [
 				{
 					id: 'node-1',
@@ -1936,13 +1978,12 @@ describe('AI Builder store', () => {
 		});
 
 		it('filters out non-credential and non-parameter validation issues', () => {
-			workflowsStore.workflowValidationIssues = [
+			setWorkflowValidationIssues([
 				{ node: 'HTTP Request', type: 'credentials', value: 'Missing credentials' },
 				{ node: 'HTTP Request', type: 'parameters', value: 'Missing parameter' },
 				{ node: 'HTTP Request', type: 'execution', value: 'Execution error' },
 				{ node: 'HTTP Request', type: 'unknown' as 'parameters', value: 'Unknown issue' },
-			];
-			workflowsStore.workflow.nodes = [];
+			]);
 
 			const builderStore = useBuilderStore();
 			// Should only include credentials and parameters types

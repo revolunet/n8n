@@ -97,7 +97,7 @@ const parameterRequiredPattern = /Parameter\s+".+"\s+is\s+required/i;
  * Transforms verbose validation messages into user-friendly action prompts.
  */
 function formatIssueMessage(issue: string | string[]): string {
-	const baseMessage = workflowsStore.formatIssueMessage(issue);
+	const baseMessage = workflowDocumentStore.value.formatIssueMessage(issue);
 
 	// Transform "Parameter "X" is required" → "Choose model" (for Model) or keep original
 	if (parameterRequiredPattern.test(baseMessage)) {
